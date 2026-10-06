@@ -38,3 +38,10 @@ voices/
 voices/*.pt
 voices/**/*.pt
 config.json
+
+# Generated audio
+/audio/*
+!/audio/.gitkeep
+
+# Downloaded Vietnamese model and vocabulary
+/models/vietnamese/

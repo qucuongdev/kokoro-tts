@@ -9,6 +9,7 @@ import numpy as np
 import time
 import os
 import sys
+from .paths import get_output_dir
 
 # Define path type for consistent handling
 PathLike = Union[str, Path]
@@ -46,7 +47,7 @@ def validate_language(lang: str) -> str:
 
 # Define and validate constants
 SAMPLE_RATE = validate_sample_rate(24000)
-DEFAULT_OUTPUT_FILE = get_base_dir() / 'output.wav'
+DEFAULT_OUTPUT_FILE = get_output_dir() / 'output.wav'
 DEFAULT_LANGUAGE = validate_language('a')  # 'a' for American English, 'b' for British English
 DEFAULT_TEXT = "Hello, welcome to this text-to-speech test."
 

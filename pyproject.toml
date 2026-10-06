@@ -45,6 +45,9 @@ dependencies = [
     "pypinyin-dict",
 ]
 
+[project.optional-dependencies]
+vietnamese = ["vig2p==0.1.2", "sea-g2p==0.10.0"]
+
 [project.urls]
 Homepage = "https://github.com/PierrunoYT/Kokoro-TTS-Local"
 Issues = "https://github.com/PierrunoYT/Kokoro-TTS-Local/issues"

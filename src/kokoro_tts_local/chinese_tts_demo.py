@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 # Import from local modules
 from contextlib import closing
 from .console import enable_utf8_console
+from .paths import get_output_dir
 
 # See setup_chinese_tts: this module's output is bilingual throughout, so the
 # streams must be usable before any function here runs.
@@ -49,7 +50,7 @@ from .chinese_config import (
 )
 # Constants
 DEFAULT_CHINESE_MODEL = str(get_model_dir() / "kokoro-v1_1-zh.pth")
-DEFAULT_CHINESE_OUTPUT = str(get_base_dir() / "output_chinese.wav")
+DEFAULT_CHINESE_OUTPUT = str(get_output_dir() / "output_chinese.wav")
 SAMPLE_RATE = 24000
 MIN_SPEED = 0.5
 MAX_SPEED = 2.0

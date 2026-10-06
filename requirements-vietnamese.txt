@@ -1,0 +1,3 @@
+# Optional Vietnamese G2P runtime; install inside the existing venv.
+vig2p==0.1.2
+sea-g2p==0.10.0

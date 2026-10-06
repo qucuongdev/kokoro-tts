@@ -43,6 +43,7 @@ from .models import (
     get_base_dir
 )
 from . import speed_dial
+from .paths import get_output_dir
 
 # Constants
 MAX_TEXT_LENGTH = 5000
@@ -69,7 +70,7 @@ def validate_sample_rate(rate: int) -> int:
 
 # Global configuration
 CONFIG_FILE = get_base_dir() / "tts_config.json"  # Stores user preferences and paths
-DEFAULT_OUTPUT_DIR = get_base_dir() / "outputs"    # Directory for generated audio files
+DEFAULT_OUTPUT_DIR = get_output_dir()  # Directory for generated audio files
 SAMPLE_RATE = validate_sample_rate(24000)  # Validated sample rate
 
 # Retention budget for the outputs dir: nothing else in the package ever
@@ -387,6 +388,8 @@ def create_interface(server_name="127.0.0.1", server_port=7860, auth=None):
     # Create interface
     with gr.Blocks(title="Kokoro TTS Generator", fill_height=True) as interface:
         gr.Markdown("# Kokoro TTS Generator")
+        if any(name.startswith("vi_") for name in voices):
+            gr.Markdown("**Tiếng Việt:** chọn giọng bắt đầu bằng `vi_`, nhập văn bản rồi bấm **Generate Speech**.")
 
         with gr.Row():
             with gr.Column(scale=2):
@@ -401,7 +404,7 @@ def create_interface(server_name="127.0.0.1", server_port=7860, auth=None):
 
                 voice = gr.Dropdown(
                     choices=voices,
-                    value=voices[0] if voices else None,
+                    value="vi_diem_trinh" if "vi_diem_trinh" in voices else voices[0],
                     label="Voice"
                 )
                 text = gr.Textbox(
@@ -549,7 +552,11 @@ def create_interface(server_name="127.0.0.1", server_port=7860, auth=None):
     launch_kwargs = dict(
         server_name=server_name,
         server_port=server_port,
-        share=False
+        share=False,
+        # A configured audio directory can be outside Gradio's default
+        # cwd/temp allowlist. Expose only the generated audio directory;
+        # model files and saved presets remain outside this allowlist.
+        allowed_paths=[str(DEFAULT_OUTPUT_DIR.resolve())],
     )
     supported = inspect.signature(interface.launch).parameters
     if "max_file_size" in supported:

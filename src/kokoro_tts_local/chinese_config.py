@@ -12,7 +12,7 @@ import copy
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 import logging
-from .paths import get_base_dir, get_voices_dir
+from .paths import get_base_dir, get_voices_dir, get_output_dir
 
 logger = logging.getLogger(__name__)
 
@@ -202,7 +202,7 @@ class ChineseTTSConfig:
             "paths": {
                 "voices_dir": "voices",
                 "models_dir": ".",
-                "output_dir": str(get_base_dir() / "outputs")
+                "output_dir": str(get_output_dir())
             }
         }
     

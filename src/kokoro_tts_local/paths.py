@@ -23,9 +23,21 @@ def get_voices_dir() -> Path:
     return Path(configured).expanduser().resolve() if configured else get_base_dir() / "voices"
 
 
+def get_output_dir() -> Path:
+    """Store generated audio in the working directory, with an override."""
+    configured = os.environ.get("KOKORO_OUTPUT_DIR")
+    return Path(configured).expanduser().resolve() if configured else (Path.cwd() / "audio").resolve()
+
+
 def get_model_dir() -> Path:
     configured = os.environ.get("KOKORO_MODEL_DIR")
     return Path(configured).expanduser().resolve() if configured else get_base_dir()
+
+
+def get_vietnamese_model_dir() -> Path:
+    """Keep the Vietnamese checkpoint/config separate from other languages."""
+    configured = os.environ.get("KOKORO_VI_MODEL_DIR")
+    return Path(configured).expanduser().resolve() if configured else get_model_dir() / "vietnamese"
 
 
 def get_config_path(is_chinese_model: bool = False) -> Path:

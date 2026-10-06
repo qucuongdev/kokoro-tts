@@ -257,6 +257,36 @@ class ModelConstructionTests(unittest.TestCase):
             self.assertNotIn("custom", listed)
             self.assertNotIn("qq_test", listed)
 
+            # VI has a dedicated checkpoint/config and does not fetch English
+            # voices or send Vietnamese through KPipeline's English G2P.
+            vi_dir = root / "vietnamese"
+            vi_dir.mkdir()
+            (vi_dir / "kokoro_vi.pth").write_bytes(b"vietnamese")
+            (vi_dir / "config.json").write_text('{"language": "vi"}', encoding="utf-8")
+            (voices / "diem_trinh.pt").write_bytes(b"voice")
+            fake_vig2p = types.SimpleNamespace(VietnameseG2P=lambda: (lambda text: text))
+            with mock.patch.dict(sys.modules, {"vig2p": fake_vig2p}), mock.patch.dict(
+                os.environ, {
+                    "KOKORO_VI_MODEL_DIR": str(vi_dir),
+                    "KOKORO_CONFIG_PATH": str(override),
+                }, clear=False
+            ), mock.patch.object(module, "download_voice_files") as download, mock.patch.object(
+                module, "load_vietnamese_weights"
+            ) as load_weights:
+                vietnamese = module.build_model(None, "cpu", lang_code="vi")
+            download.assert_not_called()
+            load_weights.assert_called_once_with(vietnamese.model, str(vi_dir / "kokoro_vi.pth"))
+            self.assertIsNot(vietnamese.model, english.model)
+            self.assertEqual(vietnamese.model.kwargs["model"], str(vi_dir / "kokoro_vi.pth"))
+            self.assertEqual(vietnamese.model.kwargs["config"], {"language": "vi"})
+            self.assertEqual(module.get_language_code_from_voice("vi_diem_trinh"), "vi")
+            self.assertEqual(module.get_language_code_from_voice("diem_trinh"), "vi")
+            self.assertIn("vi_diem_trinh", module.list_available_voices())
+            self.assertEqual(module.get_safe_voice_path("vi_diem_trinh"), voices / "diem_trinh.pt")
+            (voices / "diem_trinh.pt").rename(voices / "vi_diem_trinh.pt")
+            self.assertEqual(module.get_safe_voice_path("diem_trinh"), voices / "vi_diem_trinh.pt")
+            self.assertEqual(module.list_available_voices().count("vi_diem_trinh"), 1)
+
 
 class ConcurrencyLifecycleTests(unittest.TestCase):
     def test_registry_iteration_validation_and_shutdown(self):

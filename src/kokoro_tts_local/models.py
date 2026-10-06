@@ -15,7 +15,9 @@ import tempfile
 import threading
 import warnings
 import logging
-from .paths import get_base_dir, get_voices_dir, get_model_dir, get_config_path
+import math
+from .paths import get_base_dir, get_voices_dir, get_model_dir, get_config_path, get_vietnamese_model_dir
+from .vietnamese import VI_MODEL_REPO, VI_MODEL_REVISION, VI_VOICES, iter_phoneme_segments, load_vietnamese_weights
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -65,6 +67,11 @@ def get_safe_voice_path(voice_name: str) -> Path:
 
     voices_dir = get_voices_dir()
     voice_path = (voices_dir / f"{voice_name}.pt").resolve()
+    # Display an explicit language prefix while retaining downloaded names.
+    if voice_name.startswith("vi_") and voice_name[3:] in VI_VOICES and not voice_path.exists():
+        voice_path = (voices_dir / f"{voice_name[3:]}.pt").resolve()
+    elif voice_name in VI_VOICES and not voice_path.exists():
+        voice_path = (voices_dir / f"vi_{voice_name}.pt").resolve()
 
     # Ensure the resolved path is still inside the voices directory
     try:
@@ -136,12 +143,24 @@ class EnhancedKPipeline(KPipeline):
         device: str = 'cpu',
         family_lock: Optional[threading.RLock] = None,
     ):
-        super().__init__(
-            lang_code=lang_code,
-            model=model,
-            repo_id=repo_id,
-            device=device
-        )
+        if lang_code == 'vi':
+            try:
+                from vig2p import VietnameseG2P
+            except ImportError as exc:
+                raise RuntimeError("Vietnamese requires vig2p; install requirements-vietnamese.txt") from exc
+            # KPipeline's language routing does not include Vietnamese. Its
+            # acoustic KModel supports the vocabulary from the VI config.
+            self.lang_code = lang_code
+            self.model = model
+            self.repo_id = repo_id
+            self.g2p = VietnameseG2P()
+        else:
+            super().__init__(
+                lang_code=lang_code,
+                model=model,
+                repo_id=repo_id,
+                device=device
+            )
         self.device = device
         self._family_lock = family_lock or threading.RLock()
         self._published = False
@@ -214,8 +233,30 @@ class EnhancedKPipeline(KPipeline):
                 # generator the only work running on this model, and the
                 # consumers only convert and collect tensors.
                 with torch.no_grad():
-                    yield from super(EnhancedKPipeline, self).__call__(*args, **kwargs)
+                    if self.lang_code == 'vi':
+                        yield from self._iter_vietnamese(*args, **kwargs)
+                    else:
+                        yield from super(EnhancedKPipeline, self).__call__(*args, **kwargs)
         return guarded()
+
+    def _iter_vietnamese(self, text, voice, speed=1.0, split_pattern=None):
+        """Run Vietnamese phonemes against their matching checkpoint."""
+        speed = float(speed)
+        if not math.isfinite(speed) or not 0.1 <= speed <= 5.0:
+            raise ValueError("Speed must be between 0.1 and 5.0")
+        voicepack = self.load_voice(voice)
+        if not isinstance(voicepack, torch.Tensor) or voicepack.ndim != 3 or tuple(voicepack.shape[1:]) != (1, 256):
+            raise ValueError("Vietnamese voicepack must be a tensor of shape [N, 1, 256]")
+        limit = min(self.model.context_length - 2, voicepack.shape[0])
+        texts = [text] if isinstance(text, str) else text
+        for paragraph in texts:
+            for segment, phonemes in iter_phoneme_segments(paragraph, self.g2p, limit):
+                unsupported = set(phonemes) - self.model.vocab.keys()
+                if unsupported:
+                    raise ValueError(f"Vietnamese phonemes missing from model vocabulary: {sorted(unsupported)!r}")
+                style = voicepack[len(phonemes) - 1]
+                audio = self.model(phonemes, style, speed).detach().cpu()
+                yield segment, phonemes, audio
 
     def __call__(self, *args, **kwargs):
         return self.iter_speech(*args, **kwargs)
@@ -275,7 +316,8 @@ LANGUAGE_CODES = {
     'f': 'French',
     'h': 'Hindi',
     'i': 'Italian',
-    'p': 'Brazilian Portuguese'
+    'p': 'Brazilian Portuguese',
+    'vi': 'Vietnamese'
 }
 
 VOICE_PREFIX_TO_LANGUAGE_CODE = {
@@ -288,6 +330,7 @@ VOICE_PREFIX_TO_LANGUAGE_CODE = {
     'hf': 'h', 'hm': 'h',
     'if': 'i', 'im': 'i',
     'pf': 'p', 'pm': 'p',
+    'vi': 'vi',
 }
 
 # Registries contain only fully-published objects. Construction is coordinated
@@ -479,24 +522,35 @@ def build_model(
     if lang_code not in LANGUAGE_CODES:
         raise ValueError(f"Unsupported language code: {lang_code!r}")
     chinese = lang_code == 'z'
-    repo = "hexgrad/Kokoro-82M-v1.1-zh" if chinese else "hexgrad/Kokoro-82M"
-    filename = 'kokoro-v1_1-zh.pth' if chinese else 'kokoro-v1_0.pth'
+    vietnamese = lang_code == 'vi'
+    if vietnamese:
+        repo = VI_MODEL_REPO
+        filename = 'kokoro_vi.pth'
+        if repo_version == 'main':
+            repo_version = VI_MODEL_REVISION
+        model_dir = get_vietnamese_model_dir()
+    else:
+        repo = "hexgrad/Kokoro-82M-v1.1-zh" if chinese else "hexgrad/Kokoro-82M"
+        filename = 'kokoro-v1_1-zh.pth' if chinese else 'kokoro-v1_0.pth'
+        model_dir = get_model_dir()
     revision_dir = None
-    if repo_version != "main":
+    if repo_version != "main" and not (vietnamese and repo_version == VI_MODEL_REVISION):
         revision_id = hashlib.sha256(
             f"{repo}@{repo_version}".encode("utf-8")
         ).hexdigest()[:16]
-        revision_dir = get_model_dir() / "revisions" / revision_id
+        revision_dir = model_dir / "revisions" / revision_id
     checkpoint = (
         os.path.abspath(model_path)
         if model_path
-        else str((revision_dir or get_model_dir()) / filename)
+        else str((revision_dir or model_dir) / filename)
     )
-    if os.environ.get("KOKORO_CONFIG_PATH"):
+    if vietnamese and os.environ.get("KOKORO_VI_CONFIG_PATH"):
+        config_path = str(Path(os.environ["KOKORO_VI_CONFIG_PATH"]).expanduser().resolve())
+    elif not vietnamese and os.environ.get("KOKORO_CONFIG_PATH"):
         config_path = str(get_config_path(chinese))
     else:
         config_name = "config-v1_1-zh.json" if chinese else "config.json"
-        config_path = str((revision_dir or get_model_dir()) / config_name)
+        config_path = str((revision_dir or model_dir) / config_name)
     family_key = (repo, checkpoint, config_path, repo_version, device)
     pipeline_key = family_key + (lang_code,)
 
@@ -555,7 +609,8 @@ def build_model(
 
         # Must stay outside the `with _download_lock` block above:
         # _download_lock is a plain Lock and download_voice_files acquires it.
-        download_voice_files(repo_version=repo_version, required_count=1)
+        if not vietnamese:
+            download_voice_files(repo_version=repo_version, required_count=1)
         try:
             with open(config_path, 'r', encoding='utf-8-sig') as config_file:
                 config = json.load(config_file)
@@ -592,6 +647,8 @@ def build_model(
             try:
                 lock = threading.RLock()
                 kokoro_model = KModel(repo_id=repo, config=config, model=checkpoint).to(device).eval()
+                if vietnamese:
+                    load_vietnamese_weights(kokoro_model, checkpoint)
                 family = (kokoro_model, lock)
                 with _registry_lock:
                     if _shutting_down:
@@ -640,8 +697,9 @@ def _routable_voice_names(voice_files: List[Path]) -> List[str]:
         except ValueError as e:
             logger.warning(f"Ignoring voice file {voice_file.name}: {e}")
             continue
-        routable.append(voice_file.stem)
-    return routable
+        name = voice_file.stem
+        routable.append(f"vi_{name}" if name in VI_VOICES else name)
+    return sorted(set(routable))
 
 
 def list_available_voices() -> List[str]:
@@ -703,6 +761,8 @@ def get_language_code_from_voice(voice_name: str) -> str:
         Language code for the voice
     """
     name = Path(voice_name).stem
+    if name in VI_VOICES:
+        return 'vi'
     if len(name) < 3 or name[2] != '_':
         raise ValueError("Voice name must begin with a two-character prefix and underscore")
     prefix = name[:2].lower()
