@@ -26,6 +26,97 @@ logger = logging.getLogger(__name__)
 # Safe voice name regex (alphanumeric, underscore, dash only)
 _VOICE_NAME_RE = re.compile(r'^[a-zA-Z0-9_-]+$')
 
+
+def _normalize_vietnamese_text(text: str) -> str:
+    """Normalize digits, phone numbers, decimals, tech acronyms, and symbols into natural Vietnamese words."""
+    if not isinstance(text, str) or not text.strip():
+        return text
+
+    # 1. Tech acronyms & common English words in Vietnamese scripts
+    tech_map = {
+        r'\bAI\b': 'ây ai',
+        r'\bai\b': 'ây ai',
+        r'\bApp\b': 'áp',
+        r'\bapp\b': 'áp',
+        r'\bVideo\b': 'vi đê ô',
+        r'\bvideo\b': 'vi đê ô',
+        r'\bYouTube\b': 'du tuýp',
+        r'\byoutube\b': 'du tuýp',
+        r'\bTikTok\b': 'tích tóc',
+        r'\btiktok\b': 'tích tóc',
+        r'\bFacebook\b': 'phây búc',
+        r'\bfacebook\b': 'phây búc',
+        r'\bZalo\b': 'gia lo',
+        r'\bzalo\b': 'gia lo',
+        r'\bWebsite\b': 'web sai',
+        r'\bwebsite\b': 'web sai',
+        r'\bOnline\b': 'on lai',
+        r'\bonline\b': 'on lai',
+        r'\bOffline\b': 'off lai',
+        r'\boffline\b': 'off lai',
+        r'\bAPI\b': 'ây pi ai',
+        r'\bapi\b': 'ây pi ai',
+        r'\bSRT\b': 'ét rờ tê',
+        r'\bTTS\b': 'tê tê ét',
+        r'\bGB\b': 'gi ga bay',
+        r'\bMB\b': 'mê ga bay',
+    }
+    for pattern, repl in tech_map.items():
+        text = re.sub(pattern, repl, text, flags=re.IGNORECASE)
+
+    # 2. Decimals: 3.5 -> 3 phẩy 5, 3,5 -> 3 phẩy 5
+    text = re.sub(r'(\d+)[.,](\d+)', r'\1 phẩy \2', text)
+
+    digits_map = {
+        '0': 'không', '1': 'một', '2': 'hai', '3': 'ba', '4': 'bốn',
+        '5': 'năm', '6': 'sáu', '7': 'bảy', '8': 'tám', '9': 'chín'
+    }
+
+    # 3. Phone numbers / 9-11 digit strings starting with 0: read digit by digit
+    def replace_phone(match):
+        num_str = match.group(0)
+        return " " + " ".join(digits_map.get(d, d) for d in num_str) + " "
+
+    text = re.sub(r'\b0\d{8,10}\b', replace_phone, text)
+
+    # 4. Standard numbers
+    try:
+        from num2words import num2words
+        has_num2words = True
+    except ImportError:
+        has_num2words = False
+
+    def replace_num(match):
+        num_str = match.group(0)
+        if has_num2words:
+            try:
+                val = int(num_str)
+                words = num2words(val, lang='vi')
+                words = words.replace("lẻ ", "không trăm ")
+                return " " + words + " "
+            except Exception:
+                pass
+        return " " + " ".join(digits_map.get(d, d) for d in num_str) + " "
+
+    text = re.sub(r'\b\d+\b', replace_num, text)
+
+    # 5. Symbols
+    symbol_map = {
+        '%': ' phần trăm ',
+        '$': ' đô la ',
+        '&': ' và ',
+        '+': ' cộng ',
+        '=': ' bằng ',
+        '@': ' a còng ',
+        '#': ' thăng ',
+        '/': ' trên ',
+        '\\': ' trên ',
+    }
+    for sym, repl in symbol_map.items():
+        text = text.replace(sym, repl)
+
+    return re.sub(r'\s+', ' ', text).strip()
+
 # Legitimate voice packs are small [N,1,256] float32 tensors (well under
 # 1 MB uncompressed). torch.load sizes one allocation per zip record from
 # the record's *declared* uncompressed size (attacker-controlled metadata)
@@ -249,11 +340,24 @@ class EnhancedKPipeline(KPipeline):
             raise ValueError("Vietnamese voicepack must be a tensor of shape [N, 1, 256]")
         limit = min(self.model.context_length - 2, voicepack.shape[0])
         texts = [text] if isinstance(text, str) else text
-        for paragraph in texts:
+        
+        # Normalize digits and common symbols into Vietnamese words
+        normalized_texts = []
+        for t in texts:
+            if isinstance(t, str):
+                normalized_texts.append(_normalize_vietnamese_text(t))
+            else:
+                normalized_texts.append(t)
+
+        for paragraph in normalized_texts:
             for segment, phonemes in iter_phoneme_segments(paragraph, self.g2p, limit):
+                # Filter out unsupported phonemes to prevent runtime crash
                 unsupported = set(phonemes) - self.model.vocab.keys()
                 if unsupported:
-                    raise ValueError(f"Vietnamese phonemes missing from model vocabulary: {sorted(unsupported)!r}")
+                    logger.warning(f"Filtering unsupported Vietnamese phonemes: {sorted(unsupported)!r}")
+                    phonemes = "".join(c for c in phonemes if c in self.model.vocab)
+                if not phonemes:
+                    continue
                 style = voicepack[len(phonemes) - 1]
                 audio = self.model(phonemes, style, speed).detach().cpu()
                 yield segment, phonemes, audio
