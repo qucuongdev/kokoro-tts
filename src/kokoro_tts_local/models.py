@@ -33,29 +33,20 @@ def _normalize_vietnamese_text(text: str) -> str:
         return text
 
     # 1. Tech acronyms & common English words in Vietnamese scripts
+    # Only uppercase 'AI' represents Artificial Intelligence ('ây ai'). Lowercase 'ai' is Vietnamese pronoun!
+    text = re.sub(r'\bAI\b', 'ây ai', text)
+
     tech_map = {
-        r'\bAI\b': 'ây ai',
-        r'\bai\b': 'ây ai',
         r'\bApp\b': 'áp',
-        r'\bapp\b': 'áp',
         r'\bVideo\b': 'vi đê ô',
-        r'\bvideo\b': 'vi đê ô',
         r'\bYouTube\b': 'du tuýp',
-        r'\byoutube\b': 'du tuýp',
         r'\bTikTok\b': 'tích tóc',
-        r'\btiktok\b': 'tích tóc',
         r'\bFacebook\b': 'phây búc',
-        r'\bfacebook\b': 'phây búc',
         r'\bZalo\b': 'gia lo',
-        r'\bzalo\b': 'gia lo',
         r'\bWebsite\b': 'web sai',
-        r'\bwebsite\b': 'web sai',
         r'\bOnline\b': 'on lai',
-        r'\bonline\b': 'on lai',
         r'\bOffline\b': 'off lai',
-        r'\boffline\b': 'off lai',
         r'\bAPI\b': 'ây pi ai',
-        r'\bapi\b': 'ây pi ai',
         r'\bSRT\b': 'ét rờ tê',
         r'\bTTS\b': 'tê tê ét',
         r'\bGB\b': 'gi ga bay',
@@ -237,6 +228,21 @@ class EnhancedKPipeline(KPipeline):
         if lang_code == 'vi':
             try:
                 from vig2p import VietnameseG2P
+                import vig2p.core
+                if not getattr(vig2p.core, "_editor_ai_patched", False):
+                    _orig_fix = vig2p.core.fix_phonemes
+                    def _safe_fix(phonemes, source_text=None, **kwargs):
+                        if source_text:
+                            st = source_text.strip().lower()
+                            if st == "y":
+                                return "ˈi"
+                            elif st == "u":
+                                return "ˈu"
+                            elif st == "e":
+                                return "ˈɛ"
+                        return _orig_fix(phonemes, source_text=source_text, **kwargs)
+                    vig2p.core.fix_phonemes = _safe_fix
+                    vig2p.core._editor_ai_patched = True
             except ImportError as exc:
                 raise RuntimeError("Vietnamese requires vig2p; install requirements-vietnamese.txt") from exc
             # KPipeline's language routing does not include Vietnamese. Its
